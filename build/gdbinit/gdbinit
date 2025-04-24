@@ -1,0 +1,2 @@
+source /Users/ravitejalingineni/Documents/Projects/esp32/uart-echo/build/gdbinit/symbols
+source /Users/ravitejalingineni/Documents/Projects/esp32/uart-echo/build/gdbinit/connect
