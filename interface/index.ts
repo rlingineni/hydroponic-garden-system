@@ -16,6 +16,9 @@ const rl = readline.createInterface({
     output: process.stdout,
 });
 
+
+
+
 // Open the port and handle commands
 port.on('open', () => {
     console.log('Serial port opened.');
