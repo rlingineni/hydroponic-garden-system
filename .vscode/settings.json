@@ -12,5 +12,12 @@
     "files.associations": {
         "adc.h": "c",
         "esp_log.h": "c"
+    },
+    "github.copilot.enable": {
+        "*": true,
+        "plaintext": false,
+        "markdown": false,
+        "scminput": false,
+        "yaml": true
     }
 }

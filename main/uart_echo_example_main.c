@@ -48,9 +48,9 @@ const int PH_SENSOR_PIN = ADC1_CHANNEL_6;
 const int WATER_LEVEL_PIN = 12;
 
 const int PH_UP_PIN = 33;
-const int PLANT_FOOD_PIN = 32;
+const int PH_DOWN_PIN = 32;
 
-const int PH_DOWN_PIN = 22;
+const int PLANT_FOOD_PIN = 22;
 
 const int FLOW_DURATION = 2000; // 3 seconds
 
@@ -81,13 +81,12 @@ static void get_temperature(void *pvParameters)
     {
         float a = sensor_read();
 
-
         // convert float value to string before sending
         char buffer[20];
         snprintf(buffer, sizeof(buffer), "%.2f", a);
 
         char result[50];                             // Ensure the array is large enough to hold the concatenated string
-        strcpy(result, "T:");              // Copy the initial string into the result
+        strcpy(result, "T:");                        // Copy the initial string into the result
         char *return_value = strcat(result, buffer); // Append buffer to result and get the return value
 
         uart_write_bytes(ECHO_UART_PORT_NUM, return_value, strlen(return_value));
@@ -119,21 +118,21 @@ static void dispense_ph_up(void *arg)
 static void dispense_ph_down(void *arg)
 {
     ESP_LOGI("Motor", "Dispensing PH_DOWN");
+    gpio_reset_pin(PH_DOWN_PIN);
+    gpio_set_direction(PH_DOWN_PIN, GPIO_MODE_OUTPUT);
 
-    // gpio_reset_pin(PH_DOWN_PIN);
-    // gpio_reset_pin(PH_DOWN_REVERSE_PIN);
-    // gpio_set_direction(PH_DOWN_REVERSE_PIN, GPIO_MODE_OUTPUT);
-    // gpio_set_direction(PH_DOWN_PIN, GPIO_MODE_OUTPUT);
-
-    // gpio_set_level(PH_DOWN_PIN, 0);
-    // gpio_set_level(PH_DOWN_REVERSE_PIN, 0);
-
-    // vTaskDelay(FLOW_DURATION / portTICK_PERIOD_MS);
-
-    // gpio_set_level(PH_DOWN_PIN, 0);
-    // gpio_set_level(PH_DOWN_REVERSE_PIN, 0);
-
-    // vTaskSuspend(dispensePhDownHandle);
+    while (1)
+    {
+        if (should_dispense_ph_down)
+        {
+            ESP_LOGI("Motor", "Activating PH_UP_PIN");
+            gpio_set_level(PH_DOWN_PIN, 1);
+            vTaskDelay(FLOW_DURATION / portTICK_PERIOD_MS);
+            gpio_set_level(PH_DOWN_PIN, 0);
+            should_dispense_ph_down = false;
+        }
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
 }
 
 static void dispense_plant_food(void *arg)
@@ -166,11 +165,11 @@ static void get_water_level(void *arg)
 
         if (water_level == 0)
         {
-            uart_write_bytes(ECHO_UART_PORT_NUM, "Water Level: LOW", strlen("WL: LOW;"));
+            uart_write_bytes(ECHO_UART_PORT_NUM, "WL: LOW", strlen("WL: LOW"));
         }
         else
         {
-            uart_write_bytes(ECHO_UART_PORT_NUM, "Water Level: HIGH", strlen("WL: HIGH;"));
+            uart_write_bytes(ECHO_UART_PORT_NUM, "WL: HIGH", strlen("WL: HIGH"));
         }
 
         vTaskDelay(flash_period / portTICK_PERIOD_MS);
@@ -198,23 +197,35 @@ static void blink_task(void *arg)
 // 2. 5V sensor to 3V reading?
 // 3. Docs for ESP Methods?
 
+// 1740 +- 100 - PH-7.0
+// 2370 +- 100 - PH-4.0
+
+// 1/210
+
 static void get_ph_value(void *arg)
 {
     // Configure ADC1 to read from channel 7 (GPIO25 / A1)
     adc1_config_width(ADC_WIDTH_BIT_12);                        // Set ADC resolution to 12 bits
     adc1_config_channel_atten(ADC1_CHANNEL_6, ADC_ATTEN_DB_11); // Set attenuation for full-scale voltage
-    int ph_value = 0;
+    float ph_value = 0;
     while (1)
     {
         // Read the analog value from GPIO25 (ADC1_CHANNEL_7)
         ph_value = adc1_get_raw(ADC1_CHANNEL_6);
 
-        // Print the pH value to the console
-        printf("pH Value (ADC Reading): %d\n", ph_value);
-        // ESP_LOGI("PH_LEVEL", "PH VALUE %d",ph_value);          // prints a INFO message
+        float ph_value_calibrated = -0.00476 * ph_value + 15.28; // Calibrate the value to get the pH level
 
+        // convert float value to string before sending
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "%.2f", ph_value_calibrated);
+
+        char result[50];                             // Ensure the array is large enough to hold the concatenated string
+        strcpy(result, "PH:");                        // Copy the initial string into the result
+        char *return_value = strcat(result, buffer); // Append buffer to result and get the return value
+
+        uart_write_bytes(ECHO_UART_PORT_NUM, return_value, strlen(return_value));
         // Delay for 1 second before reading again
-        vTaskDelay(1000 / portTICK_PERIOD_MS); // Delay for 1 second
+        vTaskDelay(2200 / portTICK_PERIOD_MS); // Delay for 1 second
     }
 }
 
@@ -265,14 +276,19 @@ static void echo_task(void *arg)
                 if (flash_period <= flash_period_dec)
                     flash_period = flash_period_dec;
                 break;
-            case 'A':
+            case 'F':
+            {
+                should_dispense_plant_food = true;
+            }
+            break;
+            case 'U':
             {
                 should_dispense_ph_up = true;
             }
             break;
-            case 'B':
+            case 'D':
             {
-                should_dispense_plant_food = true;
+                should_dispense_ph_down = true;
             }
             break;
             case 'R':
@@ -300,27 +316,26 @@ void app_main(void)
     blink_led();
     printf("LED Blinking\n");
 
+    // dispense_ph_up(NULL);
+    // dispense_plant_food(NULL);
+
     // Detect the DS18B20 sensor in the bus
     sensor_detect();
 
-    // xTaskCreate(echo_task, "uart_echo_task", ECHO_TASK_STACK_SIZE, NULL, 10, NULL);
+    xTaskCreate(echo_task, "uart_echo_task", ECHO_TASK_STACK_SIZE, NULL, 10, NULL);
 
     // xTaskCreate(blink_task, "blink_task", 1024, NULL, 5, NULL);
 
     xTaskCreate(get_water_level, "get_water_level", 2000, NULL, 5, &getWaterLevelHandle);
 
-    // Create the get_ph_value task
+    // // Create the get_ph_value task
     xTaskCreate(get_ph_value, "get_ph_value", 2000, NULL, 5, &getPHValueHandle);
 
     // Start task to read the temperature from DS18B20 sensor
     xTaskCreate(get_temperature, "temperature_detect", 4096, NULL, 5, &getTemperatureHandle);
 
-    xTaskCreate(echo_task, "uart_echo_task", ECHO_TASK_STACK_SIZE, NULL, 10, NULL);
-
     xTaskCreate(dispense_ph_up, "dispense_ph_up", 4096, NULL, 5, &dispensePhUpHandle);
 
-    // xTaskCreate(dispense_ph_down, "dispense_ph_down", 4096, NULL, 5, &dispensePhDownHandle);
+    xTaskCreate(dispense_ph_down, "dispense_ph_down", 4096, NULL, 5, &dispensePhDownHandle);
     xTaskCreate(dispense_plant_food, "dispense_plant_food", 4096, NULL, 5, &dispensePlantFoodHandle);
-
-    // vTaskSuspend(myTaskHandle);
 }

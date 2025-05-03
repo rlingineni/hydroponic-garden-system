@@ -1,5 +1,19 @@
+const http = require('http');
+const WebSocketServer = require('ws');
+
 const { SerialPort } = require('serialport');
 const readline = require('readline');
+
+interface WebSocketWithSerialPort extends WebSocket {
+    send(data: string, cb?: (err?: Error) => void): void;
+    on(event: string, listener: (data: any) => void): this;
+}
+
+
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+});
 
 // Replace with your ESP32's serial port
 const portPath = '/dev/tty.usbserial-59170078541';
@@ -10,51 +24,60 @@ const port = new SerialPort({
     baudRate: 115200, // Match the baud rate in your ESP32 code
 });
 
-// Create a readline interface for user input
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-});
+// Create a new HTTP server
+const server = http.createServer();
+const wss = new WebSocketServer.Server({ server });
 
 
+// // Prompt the user for input
+// rl.prompt();
 
+// // Handle user input
+// rl.on('line', (input: string) => {
+//     console.log(`Sending to ESP32: ${input}`);
+//     // Send the input to the serial port
+//     port.write(input, (err?: Error) => {
+//         if (err) {
+//             console.error('Error writing to serial port:', err.message);
+//         } else {
+//             console.log(`Sent to serial port: ${input}`);
+//         }
+//     });
+//     rl.prompt();
+// }
+// );
 
-// Open the port and handle commands
-port.on('open', () => {
-    console.log('Serial port opened.');
+wss.on('connection', (ws: WebSocketWithSerialPort) => {
+    console.log('New client connected');
 
-    // Prompt the user for input
-    rl.setPrompt('Enter command to send to ESP32: ');
-    rl.prompt();
-
-    // Handle user input
-    rl.on('line', (input: string) => {
-        // Send the user input as a command to the ESP32
-        port.write(input, (err: { message: any }) => {
+    // Handle messages from WebSocket clients
+    ws.on('message', (message: string) => {
+        console.log(`Received from WebSocket: ${message}`);
+        // Send the message to the serial port
+        port.write(message, (err?: Error) => {
             if (err) {
                 console.error('Error writing to serial port:', err.message);
+                ws.send(`Error: ${err.message}`);
             } else {
-                console.log(`Command "${input}" sent to ESP32.`);
+                console.log(`Sent to serial port: ${message}`);
             }
         });
+    });
 
-        // Prompt for the next command
-        rl.prompt();
+    // Handle serial port data and send it to WebSocket clients
+    port.on('data', (data: Buffer) => {
+        console.log(`Received from serial port: ${data.toString()}`);
+        ws.send(data.toString());
+    });
+
+    ws.on('close', () => {
+        console.log('Client disconnected');
     });
 });
 
-// Handle data received from the ESP32
-port.on('data', (data: { toString: () => any }) => {
-    console.log('Received from ESP32:', data.toString());
+// also send 
+
+server.listen(8080, () => {
+    console.log('WebSocket server is running on ws://localhost:8080');
 });
 
-// Handle errors
-port.on('error', (err: { message: any }) => {
-    console.error('Serial port error:', err.message);
-});
-
-// Handle program exit
-rl.on('close', () => {
-    console.log('Exiting program.');
-    process.exit(0);
-});
