@@ -1,0 +1,171 @@
+---
+import squiggleLine from "../assets/squiggle.svg?raw";
+import background from "../assets/background.svg";
+import upButton from "../assets/upButton.svg?raw";
+---
+
+<div
+  class="flex flex-col items-center justify-center w-full h-screen bg-gray-100"
+>
+  <div class="relative border border-black rounded-sm h-[80%] w-1/4 px-10 py-4">
+    <p class="font-thin text-2xl w-60">Hydroponic Garden System</p>
+    <Fragment set:html={squiggleLine} />
+
+    <div
+      class="relative w-[354px] h-[199px] shrink-0 [background:#D9D9D9] rounded-[0px_0px_20px_20px] css mt-10"
+    >
+      <div
+        class="absolute bottom-2 w-full flex flex-col items-center gap-2 px-4 py-2 text-sm"
+      >
+        <p id="water-level-indicator" class="w-full">Water Level: --</p>
+
+        <p id="temp-indicator" class="w-full">Temp: --</p>
+        <p id="ph-indicator" class="w-full">PH Level: --</p>
+      </div>
+    </div>
+
+    <div class="flex justify-between px-6 mt-10">
+      <div class="flex gap-6">
+        <div class="flex flex-col items-center gap-2">
+          <button id="ph-up-button" class="cursor-pointer">
+            <Fragment set:html={upButton} />
+          </button>
+          <p>PH +</p>
+        </div>
+        <div class="flex flex-col items-center gap-2">
+          <button id="ph-down-button" class="rotate-180 cursor-pointer">
+            <Fragment set:html={upButton} />
+          </button>
+          <p class="ml-2">PH -</p>
+        </div>
+      </div>
+      <div class="flex flex-col items-center gap-2">
+        <button class="bg-gray-200 rounded-md p-2 w-28 h-10 cursor-pointer"
+        ></button>
+        <p>Toggle LED</p>
+      </div>
+    </div>
+
+    <div class="">
+      <input
+        id="input-bar"
+        onkeydown="sendInputCommand()"
+        class="absolute bottom-4 w-[325px] h-[46px] shrink-0 border rounded-md border-solid border-black py-2 px-2 css text-xl"
+        type="text"
+        placeholder="say something to your plants"
+      />
+    </div>
+  </div>
+</div>
+
+<script is:inline>
+  function convertToFahrenheit(celsius) {
+    return (celsius * 9) / 5 + 32;
+  }
+
+  const temperature = convertToFahrenheit(25); // Example temperature value in Celsius
+  const ph_level = 60; // Example humidity value
+
+  const socket = new WebSocket("ws://localhost:8080");
+
+  socket.addEventListener("open", () => {
+    console.log("Connected to WebSocket server");
+  });
+
+  socket.addEventListener("message", (event) => {
+    console.log("Message from server:", event.data);
+
+    function updateIndicator(id, value) {
+      const indicator = document.getElementById(id);
+      if (indicator) {
+        indicator.textContent = value;
+      } else {
+        console.error(`Element with id ${id} not found`);
+      }
+    }
+    const command = event.data.split(":");
+    switch (command[0]) {
+      case "T":
+        {
+          const val = parseFloat(command[1]);
+          updateIndicator("temp-indicator", `Temp: ${val}°F`);
+        }
+        break;
+      case "WL":
+        {
+          const val = command[1];
+          if (val.includes("LOW")) {
+            updateIndicator("water-level-indicator", "Water Level: Low");
+          } else if (val.includes("HIGH")) {
+            updateIndicator("water-level-indicator", "Water Level: Good :)");
+          }
+        }
+        break;
+      case "PH":
+        {
+          const phLevel = parseFloat(command[1]);
+          updateIndicator("ph-indicator", `PH Level: ${phLevel}`);
+        }
+        break;
+      default:
+        console.log("Unknown command:", command);
+    }
+  });
+
+  socket.addEventListener("close", () => {
+    console.log("Disconnected from WebSocket server");
+  });
+
+  socket.addEventListener("error", (error) => {
+    console.error("WebSocket error:", error);
+  });
+
+  const buttons = ["ph-up-button", "ph-down-button", "toggle-led-button"];
+  const input = document.getElementById("input-bar");
+  if (input) {
+    input.addEventListener("keydown", sendInputCommand);
+  } else {
+    console.error("Input element not found");
+  }
+
+  buttons.forEach((buttonId) => {
+    const button = document.getElementById(buttonId);
+    if (button) {
+      console.log(`Button found: ${buttonId}`);
+      button.addEventListener("click", (ev) => {
+        const commands = {
+          "ph-up-button": "U",
+          "ph-down-button": "D",
+          "toggle-led-button": "L",
+        };
+        console.log(buttonId);
+        sendCommand(commands[buttonId]);
+      });
+    }
+  });
+
+  function sendCommand(command) {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(command);
+      console.log(`Command sent: ${command}`);
+    } else {
+      console.error("WebSocket is not open. Cannot send command.");
+    }
+  }
+
+  function sendInputCommand(event) {
+    const input = document.getElementById("input-bar");
+
+    if (input && event.key === "Enter") {
+      const command = input.value;
+      if (socket.readyState === WebSocket.OPEN) {
+        alert(`Sending command: ${command}`);
+        socket.send(command);
+        console.log(`Command sent: ${command}`);
+        input.value = ""; // Clear the input field after sending
+      } else {
+        console.error("WebSocket is not open. Cannot send command.");
+      }
+    }
+  }
+</script>
