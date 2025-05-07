@@ -16,7 +16,7 @@ const rl = readline.createInterface({
 });
 
 // Replace with your ESP32's serial port
-const portPath = '/dev/tty.usbserial-59170078541';
+const portPath = '/dev/tty.usbserial-59170079241';
 
 // Create a new serial port instance
 const port = new SerialPort({

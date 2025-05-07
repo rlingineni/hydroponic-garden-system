@@ -45,42 +45,53 @@ const int LED_BLINK_PIN = 13;
 const int TEMP_SENSOR_PIN = 13;
 const int PH_SENSOR_PIN = ADC1_CHANNEL_6;
 
-const int WATER_LEVEL_PIN = 12;
-
+const int WATER_LEVEL_PIN = 14;
+const int LIGHT_CHECK_PIN = 27;
 const int PH_UP_PIN = 33;
 const int PH_DOWN_PIN = 32;
 
-const int PLANT_FOOD_PIN = 22;
+const int PLANT_FOOD_PIN = 32;
 
-const int FLOW_DURATION = 2000; // 3 seconds
+const int FLOW_DURATION = 1000; // 2 seconds
 
 bool should_dispense_ph_up = false;
 bool should_dispense_ph_down = false;
+bool should_auto_ph = false;
 bool should_dispense_plant_food = false;
+bool should_toggle_leds = false;
+
+bool leds_on = false;
+
+#define MIN_VAL 0
+#define MAX_VAL 4095
 
 #define DEFAULT_PERIOD 1000
 
 #define BUF_SIZE (1024)
 
 static uint8_t s_led_state = 1;
-
+static float PH_VALUE_NOW = 7.0;
+static float set_ph_value = 7.0;
+static float error_ph = 0.20;
+static uint8_t START_VALUE = 0;
 static uint32_t flash_period = DEFAULT_PERIOD;
 static uint32_t flash_period_dec = DEFAULT_PERIOD / 10;
 
 TaskHandle_t getTemperatureHandle = NULL;
 TaskHandle_t getWaterLevelHandle = NULL;
 TaskHandle_t getPHValueHandle = NULL;
-
+TaskHandle_t autoPHValueHandle = NULL;
 TaskHandle_t dispensePhUpHandle = NULL;
 TaskHandle_t dispensePhDownHandle = NULL;
 TaskHandle_t dispensePlantFoodHandle = NULL;
+TaskHandle_t lightCheckHandle = NULL;
+TaskHandle_t toggleLedsHandle = NULL;
 
 static void get_temperature(void *pvParameters)
 {
     while (1)
     {
         float a = sensor_read();
-
         // convert float value to string before sending
         char buffer[20];
         snprintf(buffer, sizeof(buffer), "%.2f", a);
@@ -176,32 +187,6 @@ static void get_water_level(void *arg)
     }
 }
 
-static void blink_led(void)
-{
-    /* Set the GPIO level according to the state (LOW or HIGH)*/
-    gpio_set_level(13, s_led_state);
-}
-
-static void blink_task(void *arg)
-{
-    while (1)
-    {
-        s_led_state = !s_led_state;
-        blink_led();
-        vTaskDelay(flash_period / portTICK_PERIOD_MS);
-    }
-}
-
-// Questions for TA:
-// 1. Reading Value from PH
-// 2. 5V sensor to 3V reading?
-// 3. Docs for ESP Methods?
-
-// 1740 +- 100 - PH-7.0
-// 2370 +- 100 - PH-4.0
-
-// 1/210
-
 static void get_ph_value(void *arg)
 {
     // Configure ADC1 to read from channel 7 (GPIO25 / A1)
@@ -220,12 +205,117 @@ static void get_ph_value(void *arg)
         snprintf(buffer, sizeof(buffer), "%.2f", ph_value_calibrated);
 
         char result[50];                             // Ensure the array is large enough to hold the concatenated string
-        strcpy(result, "PH:");                        // Copy the initial string into the result
+        strcpy(result, "PH:");                       // Copy the initial string into the result
         char *return_value = strcat(result, buffer); // Append buffer to result and get the return value
 
         uart_write_bytes(ECHO_UART_PORT_NUM, return_value, strlen(return_value));
         // Delay for 1 second before reading again
+
+        PH_VALUE_NOW = ph_value_calibrated;
         vTaskDelay(2200 / portTICK_PERIOD_MS); // Delay for 1 second
+    }
+}
+
+static void light_control_led(int val)
+{
+    val = (val < 0) ? 0 : (val > 4096) ? 4096
+                                       : val;
+    gpio_reset_pin(LIGHT_CHECK_PIN);
+    gpio_set_direction(LIGHT_CHECK_PIN, GPIO_MODE_OUTPUT);
+
+    if (val > 1000)
+    {
+        leds_on = true;
+        gpio_set_level(LIGHT_CHECK_PIN, 1);
+    }
+    else
+    {
+        leds_on = false;
+        gpio_set_level(LIGHT_CHECK_PIN, 0);
+    }
+
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+}
+
+static void toggle_led(void *arg)
+{
+    while (1)
+    {
+        if (should_toggle_leds)
+        {
+            if (leds_on)
+            {
+                light_control_led(0);
+            }
+            else
+            {
+                light_control_led(4000);
+            }
+        }
+    }
+}
+
+static void light_check(void *arg)
+{
+    // Configure ADC1 to read from channel 3 (GPIO39 / A3)
+    adc1_config_width(ADC_WIDTH_BIT_12);                        // Set ADC resolution to 12 bits
+    adc1_config_channel_atten(ADC1_CHANNEL_3, ADC_ATTEN_DB_11); // Set attenuation for full-scale voltage
+
+    int light_value = 0;
+    while (1)
+    {
+
+        
+        // Read the analog value from GPIO25 (ADC1_CHANNEL_7)
+        light_value = adc1_get_raw(ADC1_CHANNEL_3);
+
+        // Print the ADC to the console
+        light_control_led(light_value);
+
+        char buffer[20];
+        snprintf(buffer, sizeof(buffer), "%.2d", light_value);
+
+        char result[50];                             // Ensure the array is large enough to hold the concatenated string
+        strcpy(result, "L:");                        // Copy the initial string into the result
+        char *return_value = strcat(result, buffer); // Append buffer to result and get the return value
+
+        uart_write_bytes(ECHO_UART_PORT_NUM, return_value, strlen(return_value));
+
+        // Delay for 1 second before reading again
+        vTaskDelay(250 / portTICK_PERIOD_MS); // Delay for 1 second
+    }
+}
+
+static void auto_PH(void *arg)
+{
+    set_ph_value = 6.0;
+    int cnt = 1;
+    while (1)
+    {
+        if (should_auto_ph)
+        {
+            if (PH_VALUE_NOW < set_ph_value - error_ph)
+            {
+                should_dispense_ph_up = true;
+            }
+            else if (PH_VALUE_NOW > set_ph_value + error_ph)
+            {
+                should_dispense_ph_down = true;
+            }
+            else
+            {
+                should_dispense_ph_up = false;
+                should_dispense_ph_down = false;
+            }
+            cnt += 1;
+            if (cnt == 50)
+            {
+                cnt = 1;
+                should_dispense_ph_down = false;
+                should_dispense_ph_up = false;
+            }
+            vTaskDelay(1000 / portTICK_PERIOD_MS); // Delay for 1 second
+        }
     }
 }
 
@@ -267,32 +357,50 @@ static void echo_task(void *arg)
             switch (data[0])
             {
             case 'I':
-                s_led_state = 1;
-                blink_led();
-                uart_write_bytes(ECHO_UART_PORT_NUM, "ESP32", strlen("ESP32"));
-                break;
-            case 'T':
-                flash_period -= flash_period_dec;
-                if (flash_period <= flash_period_dec)
-                    flash_period = flash_period_dec;
+                uart_write_bytes(ECHO_UART_PORT_NUM, "ESP32-Hydroponic garden system", strlen("ESP32-Hydroponic garden system"));
                 break;
             case 'F':
-            {
                 should_dispense_plant_food = true;
-            }
-            break;
+                break;
             case 'U':
-            {
                 should_dispense_ph_up = true;
-            }
-            break;
+                break;
             case 'D':
-            {
                 should_dispense_ph_down = true;
+                break;
+            case 'R':
+                should_dispense_ph_up = false;
+                should_dispense_ph_down = false;
+                break;
+            case 'P':
+                should_auto_ph = true;
+                if (should_dispense_ph_down == false && should_dispense_ph_up == false)
+                {
+                    should_auto_ph = false;
+                }
+                break;
+            case 'L':
+            {
+                should_toggle_leds = true;
             }
             break;
-            case 'R':
-                flash_period = DEFAULT_PERIOD;
+            case 'S':
+                vTaskResume(getPHValueHandle);
+                vTaskResume(lightCheckHandle);
+                vTaskResume(getWaterLevelHandle);
+                vTaskResume(getTemperatureHandle);
+                vTaskResume(dispensePhUpHandle);
+                vTaskResume(dispensePhDownHandle);
+                vTaskResume(autoPHValueHandle);
+                break;
+            case 'Q':
+                vTaskSuspend(getPHValueHandle);
+                vTaskSuspend(lightCheckHandle);
+                vTaskSuspend(getWaterLevelHandle);
+                vTaskSuspend(getTemperatureHandle);
+                vTaskSuspend(dispensePhUpHandle);
+                vTaskSuspend(dispensePhDownHandle);
+                vTaskSuspend(autoPHValueHandle);
                 break;
             default:
                 break;
@@ -313,29 +421,28 @@ void app_main(void)
 
     // Plant_Food dispense
 
-    blink_led();
-    printf("LED Blinking\n");
-
-    // dispense_ph_up(NULL);
-    // dispense_plant_food(NULL);
+    // blink_led();
+    // printf("LED Blinking\n");
 
     // Detect the DS18B20 sensor in the bus
     sensor_detect();
 
     xTaskCreate(echo_task, "uart_echo_task", ECHO_TASK_STACK_SIZE, NULL, 10, NULL);
 
-    // xTaskCreate(blink_task, "blink_task", 1024, NULL, 5, NULL);
-
-    xTaskCreate(get_water_level, "get_water_level", 2000, NULL, 5, &getWaterLevelHandle);
-
-    // // Create the get_ph_value task
-    xTaskCreate(get_ph_value, "get_ph_value", 2000, NULL, 5, &getPHValueHandle);
-
     // Start task to read the temperature from DS18B20 sensor
     xTaskCreate(get_temperature, "temperature_detect", 4096, NULL, 5, &getTemperatureHandle);
+    xTaskCreate(get_water_level, "get_water_level", 2000, NULL, 5, &getWaterLevelHandle);
+
+    // Create the get_ph_value task
+    xTaskCreate(get_ph_value, "get_ph_value", 2000, NULL, 5, &getPHValueHandle);
 
     xTaskCreate(dispense_ph_up, "dispense_ph_up", 4096, NULL, 5, &dispensePhUpHandle);
 
     xTaskCreate(dispense_ph_down, "dispense_ph_down", 4096, NULL, 5, &dispensePhDownHandle);
-    xTaskCreate(dispense_plant_food, "dispense_plant_food", 4096, NULL, 5, &dispensePlantFoodHandle);
+
+    xTaskCreate(light_check, "light_check", 4096, NULL, 5, &lightCheckHandle);
+
+    xTaskCreate(toggle_led, "toggle_led", 4096, NULL, 5, &toggleLedsHandle);
+
+    // xTaskCreate(auto_PH, "auto_PH", 2000, NULL, 5, &autoPHValueHandle);
 }
