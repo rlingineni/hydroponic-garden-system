@@ -17,7 +17,8 @@ import upButton from "../assets/upButton.svg?raw";
       class="relative w-[354px] h-[199px] shrink-0 [background:#D9D9D9] rounded-[0px_0px_20px_20px] css mt-10"
     >
       <div
-        class="absolute bottom-0 w-full h-[120px] bg-blue-200 rounded-[0px_0px_20px_20px]"
+        id="water-level-drawing"
+        class="absolute bottom-0 w-full bg-blue-200 rounded-[0px_0px_20px_20px]"
       >
       </div>
       <div
@@ -32,25 +33,37 @@ import upButton from "../assets/upButton.svg?raw";
       </div>
     </div>
 
-    <div class="flex justify-center px-6 mt-10">
-      <div class="flex gap-6">
-        <div class="flex flex-col items-center gap-2">
-          <button id="ph-up-button" class="cursor-pointer">
-            <Fragment set:html={upButton} clas="bg-red-200 color-red-200" />
-          </button>
-          <p>PH +</p>
+    <div>
+      <div class="flex justify-center px-6 mt-10">
+        <div class="flex gap-6">
+          <div class="flex flex-col items-center gap-2">
+            <button id="ph-up-button" class="cursor-pointer">
+              <Fragment set:html={upButton} clas="bg-red-200 color-red-200" />
+            </button>
+            <p>PH +</p>
+          </div>
+          <div class="flex flex-col items-center gap-2">
+            <button id="ph-down-button" class="rotate-180 cursor-pointer">
+              <Fragment set:html={upButton} />
+            </button>
+            <p class="ml-2 text-sm red-200">PH -</p>
+          </div>
         </div>
         <div class="flex flex-col items-center gap-2">
-          <button id="ph-down-button" class="rotate-180 cursor-pointer">
-            <Fragment set:html={upButton} />
-          </button>
-          <p class="ml-2">PH -</p>
-        </div>
-      </div>
-      <div class="flex flex-col items-center gap-2">
-        <!-- <button class="bg-gray-200 rounded-md p-2 w-28 h-10 cursor-pointer"
+          <!-- <button class="bg-gray-200 rounded-md p-2 w-28 h-10 cursor-pointer"
         ></button>
         <p>Toggle LED</p> -->
+        </div>
+      </div>
+
+      <div
+        id="ph-warning"
+        class="bg-orange-200 px-2 py-2 text-sm text-center rounded-sm mt-10"
+      >
+        <p>
+          <b>Warning</b>: PH value is not stable
+        </p>
+        <p class="text-xs">Wait a bit before adjusting the PH level again</p>
       </div>
     </div>
 
@@ -64,152 +77,201 @@ import upButton from "../assets/upButton.svg?raw";
       />
     </div>
   </div>
-</div>
 
-<script is:inline>
-  function convertToFahrenheit(celsius) {
-    return (celsius * 9) / 5 + 32;
-  }
+  <script is:inline>
+    function convertToFahrenheit(celsius) {
+      return (celsius * 9) / 5 + 32;
+    }
 
-  const temperature = convertToFahrenheit(25); // Example temperature value in Celsius
-  const ph_level = 60; // Example humidity value
+    const temperature = convertToFahrenheit(25); // Example temperature value in Celsius
+    let ph_levels = []; // Example humidity value
 
-  const socket = new WebSocket("ws://localhost:8080");
+    const socket = new WebSocket("ws://localhost:8080");
 
-  socket.addEventListener("open", () => {
-    console.log("Connected to WebSocket server");
-  });
+    socket.addEventListener("open", () => {
+      console.log("Connected to WebSocket server");
+    });
 
-  socket.addEventListener("message", (event) => {
-    console.log("Message from server:", event.data);
+    socket.addEventListener("message", (event) => {
+      console.log("Message from server:", event.data);
 
-    function updateIndicator(id, value) {
-      const indicator = document.getElementById(id);
-      if (indicator) {
-        indicator.textContent = value;
-      } else {
-        console.error(`Element with id ${id} not found`);
+      function updateIndicator(id, value) {
+        const indicator = document.getElementById(id);
+        if (indicator) {
+          indicator.textContent = value;
+        } else {
+          console.error(`Element with id ${id} not found`);
+        }
       }
-    }
-    const command = event.data.split(":");
-    switch (command[0]) {
-      case "T":
-        {
-          const val = parseFloat(command[1]);
-          updateIndicator("temp-indicator", `Temp: ${val}°F`);
+
+      const setPHWarning = (show) => {
+        const warning = document.getElementById("ph-warning");
+        if (warning) {
+          warning.style.display = show ? "block" : "none";
         }
-        break;
-      case "WL":
-        {
-          const val = command[1];
-          if (val.includes("LOW")) {
-            updateIndicator("water-level-indicator", "Water Level: Low");
-          } else if (val.includes("HIGH")) {
-            updateIndicator("water-level-indicator", "Water Level: Good :)");
+      };
+
+      const waterLevelDrawing = document.getElementById("water-level-drawing");
+
+      // check the rolling average of the last 5 PH levels
+      if (ph_levels.length > 10) {
+        ph_levels.shift(); // Remove the oldest value
+      }
+      const sum = ph_levels.reduce((acc, val) => acc + val, 0);
+      const average = sum / ph_levels.length;
+      console.log("Average PH Level:", average);
+
+      // Check if the average PH level has been stable
+      if (ph_levels.length === 10) {
+        const stable = ph_levels.every((val) => Math.abs(val - average) < 0.25);
+        if (stable) {
+          console.log("PH level has been stable");
+          setPHWarning(false);
+        } else {
+          console.log("PH level is not stable");
+          setPHWarning(true);
+        }
+      }
+
+      const command = event.data.split(":");
+      switch (command[0]) {
+        case "T":
+          {
+            const val = parseFloat(command[1]);
+            updateIndicator("temp-indicator", `Temp: ${Math.round(convertToFahrenheit(val))}°F`);
           }
-        }
-        break;
-      case "PH":
-        {
-          const phLevel = parseFloat(command[1]);
-          updateIndicator("ph-indicator", `PH Level: ${phLevel}`);
-        }
-        break;
-      default:
-        console.log("Unknown command:", command);
-    }
-  });
+          break;
+        case "WL":
+          {
+            const val = command[1];
+            if (val.includes("LOW")) {
+              updateIndicator("water-level-indicator", "Water Level: Low");
+              waterLevelDrawing.style.height = "20px";
+              waterLevelDrawing.style.transition = "height 0.8s ease-in-out";
+              waterLevelDrawing.classList.add("bg-red-200");
+              waterLevelDrawing.classList.remove("bg-blue-200");
+            } else if (val.includes("HIGH")) {
+              updateIndicator("water-level-indicator", "Water Level: Good :)");
+              waterLevelDrawing.style.height = "150px";
+              waterLevelDrawing.style.transition = "height 0.8s ease-in-out";
+              waterLevelDrawing.classList.remove("bg-red-200");
+              waterLevelDrawing.classList.add("bg-blue-200");
+            }
+          }
+          break;
+        case "PH":
+          {
+            const phLevel = parseFloat(command[1]);
+            updateIndicator("ph-indicator", `PH Level: ${phLevel}`);
+            ph_levels.push(phLevel);
+          }
+          break;
+        default:
+          console.log("Unknown command:", command);
+      }
+    });
 
-  socket.addEventListener("close", () => {
-    console.log("Disconnected from WebSocket server");
-  });
+    socket.addEventListener("close", () => {
+      console.log("Disconnected from WebSocket server");
+    });
 
-  socket.addEventListener("error", (error) => {
-    console.error("WebSocket error:", error);
-  });
+    socket.addEventListener("error", (error) => {
+      console.error("WebSocket error:", error);
+    });
 
-  const buttons = ["ph-up-button", "ph-down-button", "toggle-led-button"];
-  const input = document.getElementById("input-bar");
-  if (input) {
-    input.addEventListener("keydown", sendInputCommand);
-  } else {
-    console.error("Input element not found");
-  }
-
-  buttons.forEach((buttonId) => {
-    const button = document.getElementById(buttonId);
-    if (button) {
-      console.log(`Button found: ${buttonId}`);
-      button.addEventListener("click", (ev) => {
-        const commands = {
-          "ph-up-button": "U",
-          "ph-down-button": "D",
-          "toggle-led-button": "L",
-        };
-        console.log(buttonId);
-        sendCommand(commands[buttonId]);
-      });
-    }
-  });
-
-  function sendCommand(command) {
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.send(command);
-      console.log(`Command sent: ${command}`);
-    } else {
-      console.error("WebSocket is not open. Cannot send command.");
-    }
-  }
-
-  function sendInputCommand(event) {
+    const buttons = ["ph-up-button", "ph-down-button", "toggle-led-button"];
     const input = document.getElementById("input-bar");
+    if (input) {
+      input.addEventListener("keydown", sendInputCommand);
+    } else {
+      console.error("Input element not found");
+    }
 
-    if (input && event.key === "Enter") {
-      const command = input.value;
+    buttons.forEach((buttonId) => {
+      const button = document.getElementById(buttonId);
+      if (button) {
+        console.log(`Button found: ${buttonId}`);
+        button.addEventListener("click", (ev) => {
+          const commands = {
+            "ph-up-button": "U",
+            "ph-down-button": "D",
+            "toggle-led-button": "L",
+          };
+          console.log(buttonId);
+
+          setTimeout(() => {
+            sendCommand(commands[buttonId]);
+            setTimeout(() => {
+              sendCommand(commands[buttonId]);
+              setTimeout(() => {
+                sendCommand(commands[buttonId]);
+              }, 1500);
+            }, 1500);
+          }, 1500);
+        });
+      }
+    });
+
+    function sendCommand(command) {
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(command);
         console.log(`Command sent: ${command}`);
-        input.value = ""; // Clear the input field after sending
       } else {
         console.error("WebSocket is not open. Cannot send command.");
       }
     }
-  }
 
-  const bg = document.getElementById("background");
-  const bgImage = document.createElement("img");
-  bgImage.src =
-    "https://cdn.pixabay.com/photo/2024/12/04/15/37/leaves-9244714_1280.jpg";
-  bgImage.alt = "Background Image";
-  bgImage.className = "absolute inset-0 object-cover w-full h-full opacity-50";
-  bgImage.style.zIndex = "-1"; // Set z-index to -1 to place it behind other elements
-  bg.appendChild(bgImage);
-  console.log("Background image added");
-</script>
+    function sendInputCommand(event) {
+      const input = document.getElementById("input-bar");
 
-<script type="module">
-  import {
-    animate,
-    scroll,
-  } from "https://cdn.jsdelivr.net/npm/motion@latest/+esm";
-  console.log("Motion library loaded");
-  if (document.getElementById("squiggle-line")) {
-    console.log("Squiggle line element found");
-  }
+      if (input && event.key === "Enter") {
+        const command = input.value;
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(command);
+          console.log(`Command sent: ${command}`);
+          input.value = ""; // Clear the input field after sending
+        } else {
+          console.error("WebSocket is not open. Cannot send command.");
+        }
+      }
+    }
 
-  // animate(
-  //   document.querySelector("#squiggle-line > path"),
-  //   {
-  //     pathLength: [0, 1],
-  //     x: [0, -40],
-  //     opacity: [1, 0],
-  //   },
-  //   {
-  //     duration: 1.5,
-  //     ease: "easeInOut",
-  //     repeat: Infinity,
-  //     repeatType: "loop",
-  //     repeatDelay: 0,
-  //   }
-  // );
-</script>
+    const bg = document.getElementById("background");
+    const bgImage = document.createElement("img");
+    bgImage.src =
+      "https://cdn.pixabay.com/photo/2024/12/04/15/37/leaves-9244714_1280.jpg";
+    bgImage.alt = "Background Image";
+    bgImage.className =
+      "absolute inset-0 object-cover w-full h-full opacity-50";
+    bgImage.style.zIndex = "-1"; // Set z-index to -1 to place it behind other elements
+    bg.appendChild(bgImage);
+    console.log("Background image added");
+  </script>
+
+  <script type="module">
+    import {
+      animate,
+      scroll,
+    } from "https://cdn.jsdelivr.net/npm/motion@latest/+esm";
+    console.log("Motion library loaded");
+    if (document.getElementById("squiggle-line")) {
+      console.log("Squiggle line element found");
+    }
+
+    animate(
+      document.querySelector("#squiggle-line > path"),
+      {
+        pathLength: [0, 1],
+        x: [0, -40],
+        opacity: [1, 0],
+      },
+      {
+        duration: 1.5,
+        ease: "easeInOut",
+        repeat: Infinity,
+        repeatType: "loop",
+        repeatDelay: 0,
+      }
+    );
+  </script>
+</div>
